@@ -3,10 +3,24 @@ import time
 import requests
 import yfinance as yf
 import pandas as pd
+import threading
+from http.server import HTTPServer, BaseHTTPRequestHandler
 
 # TELEGRAM CONFIGURATION
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 CHAT_ID = os.environ.get("CHAT_ID")
+class HealthCheckHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"Bot is active")
+
+def run_web_server():
+    port = int(os.environ.get("PORT", 8080))
+    server = HTTPServer(("0.0.0.0", port), HealthCheckHandler)
+    server.serve_forever()
+
+threading.Thread(target=run_web_server, daemon=True).start()
 
 def send_telegram(message):
     if not BOT_TOKEN or not CHAT_ID:
