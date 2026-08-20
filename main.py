@@ -49,7 +49,7 @@ def get_live_xauusd_price():
     except Exception:
         pass
 
-    return 4480.60
+    return 4481.90
 
 
 def calculate_volume_profile(num_bars=40, num_bins=15):
@@ -241,25 +241,28 @@ def send_entry_setup(message):
         balance = float(args[1])
         price, trend, strategy_name, detail, tv_consensus, atr, poc, vah, val = analyze_master_confluence_m15()
 
-        # Dynamic ATR-based Stop Loss & Take Profit
         sl_dist = round(atr * 1.2, 2)
         tp_dist = round(sl_dist * 2.2, 2)
 
         if trend == "BUY":
-            sl = round(price - sl_dist, 2)
-            tp = round(price + tp_dist, 2)
+            sl_price = round(price - sl_dist, 2)
+            tp_price = round(price + tp_dist, 2)
             action_text = "🟢 **ACTION: OPEN BUY ORDER**"
+            sl_str = f"${sl_price:.2f}"
+            tp_str = f"${tp_price:.2f}"
         elif trend == "SELL":
-            sl = round(price + sl_dist, 2)
-            tp = round(price - tp_dist, 2)
+            sl_price = round(price + sl_dist, 2)
+            tp_price = round(price - tp_dist, 2)
             action_text = "🔴 **ACTION: OPEN SELL ORDER**"
+            sl_str = f"${sl_price:.2f}"
+            tp_str = f"${tp_price:.2f}"
         else:
-            sl = 0.0
-            tp = 0.0
             action_text = "⚠️ **ACTION: NO TRADE (HOLD/WAIT)**"
+            sl_str = f"N/A (Hold State)"
+            tp_str = f"N/A (Hold State)"
 
         risk_amount = balance * 0.02
-        lot_size = round(risk_amount / (sl_dist * 100), 2)
+        lot_size = round(risk_amount / (sl_dist * 100), 2) if sl_dist > 0 else 0.01
         if lot_size < 0.01:
             lot_size = 0.01
 
@@ -278,8 +281,8 @@ def send_entry_setup(message):
             f"🎯 *Execution:* {action_text}\n"
             f"• *Bias Signal:* *{trend}*\n"
             f"• *Entry:* `${price:.2f}`\n"
-            f"• *Dynamic SL (ATR):* `${sl:.2f}`\n"
-            f"• *Dynamic TP (1:2.2 R:R):* `${tp:.2f}`\n\n"
+            f"• *Dynamic SL:* `{sl_str}`\n"
+            f"• *Dynamic TP:* `{tp_str}`\n\n"
             f"🛡 *Risk Management (2% Risk):*\n"
             f"• *Account Balance:* `${balance:.2f}`\n"
             f"• *Risk Amount:* `${risk_amount:.2f}`\n"
@@ -289,10 +292,11 @@ def send_entry_setup(message):
         bot.reply_to(message, response, parse_mode="Markdown")
 
     except ValueError:
-        bot.reply_to(message, "⚠️ Enter a valid balance like `/entry 100`.", parse_mode="Markdown")
+        bot.reply_to(message, "⚠️ Enter a valid numerical balance, e.g., `/entry 100`.", parse_mode="Markdown")
     except Exception as e:
         bot.reply_to(message, f"❌ Error: {e}")
 
 
 if __name__ == "__main__":
     bot.infinity_polling()
+        
