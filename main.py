@@ -1,14 +1,15 @@
 import os
 import time
-import requests
-import yfinance as yf
-import pandas as pd
 import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
+import requests
+import yfinance as yf
 
 # TELEGRAM CONFIGURATION
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 CHAT_ID = os.environ.get("CHAT_ID")
+
+# 1. KEEP-ALIVE WEB SERVER (For Render Health Checks)
 class HealthCheckHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -22,73 +23,71 @@ def run_web_server():
 
 threading.Thread(target=run_web_server, daemon=True).start()
 
-def send_telegram(message):
-    if not BOT_TOKEN or not CHAT_ID:
-        print(message)
+# 2. TELEGRAM HELPER FUNCTIONS
+def send_telegram_message(chat_id, message):
+    if not BOT_TOKEN:
         return
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-    payload = {"chat_id": CHAT_ID, "text": message, "parse_mode": "Markdown"}
+    payload = {"chat_id": chat_id, "text": message, "parse_mode": "Markdown"}
     try:
-        requests.post(url, json=payload, timeout=10)
+        requests.post(url, json=payload)
     except Exception as e:
         print(f"Error sending message: {e}")
 
-def check_market_structure():
-    # Fetch Gold 15-minute candles
-    df = yf.download(tickers="GC=F", interval="15m", period="5d", progress=False)
-    
-    if len(df) < 20:
-        return
+def get_gold_price():
+    try:
+        data = yf.download(tickers="GC=F", period="2d", interval="1h", progress=False)
+        if data.empty:
+            return None
+        if isinstance(data.columns, tuple) or hasattr(data.columns, 'levels'):
+            data.columns = data.columns.get_level_values(0)
+        return float(data['Close'].iloc[-1])
+    except Exception as e:
+        print(f"Error fetching price: {e}")
+        return None
 
-    if isinstance(df.columns, pd.MultiIndex):
-        df.columns = df.columns.get_level_values(0)
-
-    df['High_20'] = df['High'].rolling(20).max()
-    df['Low_20'] = df['Low'].rolling(20).min()
-
-    last = df.iloc[-2]
-    prev = df.iloc[-3]
-    recent_high = df['High'].iloc[-22:-2].max()
-    recent_low = df['Low'].iloc[-22:-2].min()
-
-    close_price = round(float(last['Close']), 2)
-
-    # 1. LIQUIDITY SWEEP BUY SETUP
-    if prev['Low'] < recent_low and last['Close'] > recent_low and last['Close'] > last['Open']:
-        sl = round(float(prev['Low']) - 0.50, 2)
-        tp = round(close_price + ((close_price - sl) * 2), 2)
-        
-        msg = (
-            "🟢 *GOLD (XAUUSD) BUY SETUP*\n\n"
-            f"• *Reason:* Liquidity Sweep Low + CHoCH Reversal\n"
-            f"• *Entry Price:* {close_price}\n"
-            f"• *Stop Loss (SL):* {sl}\n"
-            f"• *Take Profit (TP):* {tp}\n"
-            f"• *Timeframe:* M15"
-        )
-        send_telegram(msg)
-
-    # 2. LIQUIDITY SWEEP SELL SETUP
-    elif prev['High'] > recent_high and last['Close'] < recent_high and last['Close'] < last['Open']:
-        sl = round(float(prev['High']) + 0.50, 2)
-        tp = round(close_price - ((sl - close_price) * 2), 2)
-        
-        msg = (
-            "🔴 *GOLD (XAUUSD) SELL SETUP*\n\n"
-            f"• *Reason:* Liquidity Sweep High + CHoCH Reversal\n"
-            f"• *Entry Price:* {close_price}\n"
-            f"• *Stop Loss (SL):* {sl}\n"
-            f"• *Take Profit (TP):* {tp}\n"
-            f"• *Timeframe:* M15"
-        )
-        send_telegram(msg)
-
-if __name__ == "__main__":
-    send_telegram("🚀 *Gold Market Structure Bot Active & Scanning (M15)...*")
+# 3. COMMAND LISTENER (Responds to you in Telegram)
+def poll_telegram_commands():
+    last_update_id = 0
+    print("Started listening for Telegram commands...")
     while True:
         try:
-            check_market_structure()
+            url = f"https://api.telegram.org/bot{BOT_TOKEN}/getUpdates?offset={last_update_id}&timeout=30"
+            response = requests.get(url).json()
+            
+            if "result" in response:
+                for update in response["result"]:
+                    last_update_id = update["update_id"] + 1
+                    
+                    if "message" in update and "text" in update["message"]:
+                        chat_id = update["message"]["chat"]["id"]
+                        text = update["message"]["text"].strip().lower()
+                        
+                        if text == "/start":
+                            send_telegram_message(chat_id, "🤖 *Gold Bot is Connected!* Type `/gold` to check the current live price or wait for automatic setups.")
+                        elif text == "/gold" or text == "/price":
+                            price = get_gold_price()
+                            if price:
+                                send_telegram_message(chat_id, f"🪙 *Current Gold (XAUUSD) Price:* `{price:.2f}`")
+                            else:
+                                send_telegram_message(chat_id, "⚠️ Could not fetch live Gold price right now.")
         except Exception as e:
-            print(f"Loop error: {e}")
-        time.sleep(900)  # Check every 15 minutes
-  
+            print(f"Polling error: {e}")
+        time.sleep(2)
+
+# Start command listener in the background
+threading.Thread(target=poll_telegram_commands, daemon=True).start()
+
+# 4. BACKGROUND ENTRY SCANNER LOOP
+def main():
+    # Send startup ping to your main chat ID immediately
+    if CHAT_ID:
+        send_telegram_message(CHAT_ID, "🚀 *Gold Bot restarted and running live!* Send `/gold` in our chat to test it.")
+    
+    while True:
+        # You can add background check logic here later if needed
+        time.sleep(900)
+
+if __name__ == "__main__":
+    main()
+        
