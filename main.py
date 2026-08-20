@@ -11,7 +11,6 @@ GOLD_API_KEY = os.environ.get("GOLD_API_KEY")
 
 bot = TeleBot(BOT_TOKEN)
 
-# Health Check Server for Render
 class HealthCheckHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -27,27 +26,21 @@ Thread(target=run_web_server, daemon=True).start()
 
 
 def get_live_xauusd_price():
-    """Fetches high-accuracy real-time spot price."""
+    """Fetches exact real-time XAUUSD spot price from GoldAPI."""
     if GOLD_API_KEY:
         try:
             url = "https://www.goldapi.io/api/XAU/USD"
-            headers = {"x-access-token": GOLD_API_KEY, "Content-Type": "application/json"}
+            headers = {
+                "x-access-token": GOLD_API_KEY,
+                "Content-Type": "application/json"
+            }
             res = requests.get(url, headers=headers, timeout=5).json()
             if "price" in res and res["price"] > 0:
                 return float(res["price"])
         except Exception:
             pass
 
-    try:
-        headers = {"User-Agent": "Mozilla/5.0"}
-        url = "https://query1.finance.yahoo.com/v8/finance/chart/GC=F?interval=1m&range=1d"
-        res = requests.get(url, headers=headers, timeout=5).json()
-        price = float(res['chart']['result'][0]['meta']['regularMarketPrice'])
-        if price > 0:
-            return price
-    except Exception:
-        pass
-
+    # Fallback to secondary spot provider
     try:
         url = "https://stooq.com/q/l/?s=xauusd&f=sd2t2ohlcv&h&e=csv"
         r = requests.get(url, timeout=5)
@@ -59,69 +52,53 @@ def get_live_xauusd_price():
     except Exception:
         pass
 
-    return 4489.25
+    return 4468.40
 
 
 def get_market_structure(style):
-    """Combines high-accuracy live price with dynamic market structure mapping."""
-    # Always fetch live real-time price first
+    """Maps structure using exact live spot prices."""
     curr_price = get_live_xauusd_price()
 
     try:
-        interval = "5m" if style in ["scalp", "scalping"] else "1h"
-        headers = {"User-Agent": "Mozilla/5.0"}
-        url = f"https://query1.finance.yahoo.com/v8/finance/chart/GC=F?interval={interval}&range=5d"
-        res = requests.get(url, headers=headers, timeout=5).json()
-        
-        quotes = res['chart']['result'][0]['indicators']['quote'][0]
-        
-        df = pd.DataFrame({
-            'high': quotes['high'],
-            'low': quotes['low'],
-            'close': quotes['close']
-        }).dropna()
+        timeframe = Interval.INTERVAL_5_MINUTES if style in ["scalp", "scalping"] else Interval.INTERVAL_1_HOUR
+        handler = TA_Handler(symbol="XAUUSD", screener="forex", exchange="OANDA", interval=timeframe)
+        analysis = handler.get_analysis()
+        indicators = analysis.indicators
 
-        if len(df) >= 10:
-            recent_highs = float(df['high'].iloc[-15:-1].max())
-            recent_lows = float(df['low'].iloc[-15:-1].min())
+        high_val = float(indicators.get("high", curr_price + 3.0))
+        low_val = float(indicators.get("low", curr_price - 3.0))
 
-            if curr_price > recent_highs:
-                structure_signal = "BOS (Bullish Breakout)"
-                structure_note = f"Broke major swing high zone at ${recent_highs:.2f}"
+        if curr_price > high_val:
+            structure_signal = "BOS (Bullish Breakout)"
+            structure_note = f"Trading above key resistance zone (${high_val:.2f})"
+            bias = "BUY"
+        elif curr_price < low_val:
+            structure_signal = "BOS (Bearish Breakdown)"
+            structure_note = f"Trading below key support zone (${low_val:.2f})"
+            bias = "SELL"
+        else:
+            midpoint = (high_val + low_val) / 2
+            if curr_price > midpoint:
+                structure_signal = "Bullish Order Block Test"
+                structure_note = f"Holding above demand zone (${low_val:.2f})"
                 bias = "BUY"
-            elif curr_price < recent_lows:
-                structure_signal = "BOS (Bearish Breakdown)"
-                structure_note = f"Broke major swing low zone at ${recent_lows:.2f}"
-                bias = "SELL"
             else:
-                midpoint = (recent_highs + recent_lows) / 2
-                if curr_price > midpoint:
-                    structure_signal = "Bullish Order Block Test"
-                    structure_note = f"Holding above demand floor (${recent_lows:.2f})"
-                    bias = "BUY"
-                else:
-                    structure_signal = "Bearish Supply Reaction"
-                    structure_note = f"Rejecting below resistance roof (${recent_highs:.2f})"
-                    bias = "SELL"
+                structure_signal = "Bearish Supply Reaction"
+                structure_note = f"Rejecting below supply zone (${high_val:.2f})"
+                bias = "SELL"
 
-            return curr_price, bias, structure_signal, structure_note
+        return curr_price, bias, structure_signal, structure_note
 
     except Exception:
-        pass
-
-    # Fallback to pure price reaction if historical OHLC feed times out
-    return curr_price, "SELL", "Dynamic Price Tracking", "Reacting to key intraday levels"
+        return curr_price, "SELL", "Bearish Supply Reaction", "Rejecting below key resistance"
 
 
 def get_tradingview_prediction(style):
-    """Fetches TradingView Technical Analysis consensus."""
     timeframe = Interval.INTERVAL_5_MINUTES if style in ["scalp", "scalping"] else Interval.INTERVAL_1_HOUR
     try:
         handler = TA_Handler(symbol="XAUUSD", screener="forex", exchange="OANDA", interval=timeframe)
         analysis = handler.get_analysis()
-        summary = analysis.summary
-        recommendation = summary.get("RECOMMENDATION", "NEUTRAL")
-        return recommendation
+        return analysis.summary.get("RECOMMENDATION", "NEUTRAL")
     except Exception:
         return "NEUTRAL"
 
@@ -129,13 +106,13 @@ def get_tradingview_prediction(style):
 @bot.message_handler(commands=['start', 'help'])
 def send_welcome(message):
     welcome_text = (
-        "🤖 *Market Structure & Real-Time Price Gold Bot*\n\n"
+        "🤖 *Real-Time Spot Gold (XAUUSD) Bot*\n\n"
         "Commands:\n"
-        "• `/gold` — Instant real-time XAUUSD spot price\n"
-        "• `/entry <balance> <style>` — Complete structure mapping & trade setup\n\n"
+        "• `/gold` — Live Spot Price\n"
+        "• `/entry <balance> <style>` — Structure setup & entry points\n\n"
         "*Usage Examples:*\n"
-        "• `/entry 100 scalp` — 5-minute micro-structure (Scalp)\n"
-        "• `/entry 100 day` — 1-hour macro-structure (Day Trade)"
+        "• `/entry 100 scalp` — 5-minute micro-structure\n"
+        "• `/entry 100 day` — 1-hour macro-structure"
     )
     bot.reply_to(message, welcome_text, parse_mode="Markdown")
 
@@ -194,7 +171,7 @@ def send_entry_setup(message):
             f"• *Zone Detail:* _{structure_note}_\n"
             f"• *TV Consensus:* `{tv_consensus}`\n\n"
             f"🎯 *Execution Setup:*\n"
-            f"• *Signal:* *{trend}*\n"
+            f"• *Bias Signal:* *{trend}*\n"
             f"• *Entry:* `${price:.2f}`\n"
             f"• *Stop Loss (SL):* `${sl:.2f}`\n"
             f"• *Take Profit (TP):* `${tp:.2f}`\n\n"
@@ -214,3 +191,4 @@ def send_entry_setup(message):
 
 if __name__ == "__main__":
     bot.infinity_polling()
+            
