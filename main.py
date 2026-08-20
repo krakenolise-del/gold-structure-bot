@@ -100,13 +100,26 @@ def calculate_volume_profile(num_bars=40, num_bins=15):
 
 
 def get_ta_data(interval):
-    try:
-        handler = TA_Handler(symbol="XAUUSD", screener="forex", exchange="OANDA", interval=interval)
-        analysis = handler.get_analysis()
-        return analysis.indicators, analysis.summary
-    except Exception:
-        return None, None
-
+    """Fetches technical analysis with automatic fallback and retry."""
+    exchanges = ["TVC", "OANDA", "FOREXCOM"]
+    
+    for ex in exchanges:
+        try:
+            handler = TA_Handler(
+                symbol="GOLD" if ex == "TVC" else "XAUUSD",
+                screener="forex",
+                exchange=ex,
+                interval=interval,
+                timeout=10
+            )
+            analysis = handler.get_analysis()
+            if analysis and analysis.indicators:
+                return analysis.indicators, analysis.summary
+        except Exception:
+            continue
+            
+    return None, None
+            
 
 def analyze_candle_precision():
     """Precise Candle Movement & Multi-Timeframe Engine."""
