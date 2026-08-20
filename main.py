@@ -36,20 +36,20 @@ threading.Thread(target=run_web_server, daemon=True).start()
 # 2. CONTINUOUS BACKGROUND STRUCTURE ENGINE
 def background_structure_engine():
     global LATEST_STRUCTURE
-    headers = {"User-Agent": "Mozilla/5.0"}
-    url = "https://query1.finance.yahoo.com/v8/finance/chart/XAUSD=X?interval=15m&range=2d"
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+    url = "https://query1.finance.yahoo.com/v8/finance/chart/XAUUSD=X?interval=15m&range=2d"
     
     while True:
         try:
             r = requests.get(url, headers=headers, timeout=10).json()
-            result = r['chart']['result'][0]
-            quote = result['indicators']['quote'][0]
+            chart = r.get('chart', {}).get('result', [])[0]
+            indicators = chart.get('indicators', {}).get('quote', [])[0]
             
-            highs = quote['high']
-            lows = quote['low']
-            closes = quote['close']
+            highs = indicators.get('high', [])
+            lows = indicators.get('low', [])
+            closes = indicators.get('close', [])
             
-            valid_candles = [(h, l, c) for h, l, c in zip(highs, lows, closes) if h and l and c]
+            valid_candles = [(h, l, c) for h, l, c in zip(highs, lows, closes) if h is not None and l is not None and c is not None]
             
             if len(valid_candles) >= 20:
                 recent_highs = [x[0] for x in valid_candles[-20:]]
@@ -60,17 +60,16 @@ def background_structure_engine():
                 swing_low = min(recent_lows)
                 mid_point = (swing_high + swing_low) / 2
                 
-                # Check structure position relative to recent swings
                 if current_price > mid_point:
                     trend = "BUY"
                     sl = round(swing_low - 0.50, 2)
                     tp = round(current_price + ((current_price - sl) * 2), 2)
-                    structure_desc = "Bullish (Trading in upper half of 15m range)"
+                    structure_desc = "Bullish (Upper half of 15m structure)"
                 else:
                     trend = "SELL"
                     sl = round(swing_high + 0.50, 2)
                     tp = round(current_price - ((sl - current_price) * 2), 2)
-                    structure_desc = "Bearish (Trading in lower half of 15m range)"
+                    structure_desc = "Bearish (Lower half of 15m structure)"
                 
                 LATEST_STRUCTURE = {
                     "current_price": round(current_price, 2),
@@ -83,6 +82,10 @@ def background_structure_engine():
                     "updated_at": time.time()
                 }
         except Exception as e:
+            print(f"Structure engine update error: {e}")
+            
+        time.sleep(30)
+
             print(f"Structure engine update error: {e}")
             
         time.sleep(60)
