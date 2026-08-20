@@ -26,21 +26,16 @@ Thread(target=run_web_server, daemon=True).start()
 
 
 def get_live_xauusd_price():
-    """Fetches exact real-time XAUUSD spot price from GoldAPI."""
     if GOLD_API_KEY:
         try:
             url = "https://www.goldapi.io/api/XAU/USD"
-            headers = {
-                "x-access-token": GOLD_API_KEY,
-                "Content-Type": "application/json"
-            }
+            headers = {"x-access-token": GOLD_API_KEY, "Content-Type": "application/json"}
             res = requests.get(url, headers=headers, timeout=5).json()
             if "price" in res and res["price"] > 0:
                 return float(res["price"])
         except Exception:
             pass
 
-    # Fallback to secondary spot provider
     try:
         url = "https://stooq.com/q/l/?s=xauusd&f=sd2t2ohlcv&h&e=csv"
         r = requests.get(url, timeout=5)
@@ -56,63 +51,61 @@ def get_live_xauusd_price():
 
 
 def get_market_structure(style):
-    """Maps structure using exact live spot prices."""
     curr_price = get_live_xauusd_price()
+    timeframe = Interval.INTERVAL_5_MINUTES if style in ["scalp", "scalping"] else Interval.INTERVAL_1_HOUR
 
     try:
-        timeframe = Interval.INTERVAL_5_MINUTES if style in ["scalp", "scalping"] else Interval.INTERVAL_1_HOUR
         handler = TA_Handler(symbol="XAUUSD", screener="forex", exchange="OANDA", interval=timeframe)
         analysis = handler.get_analysis()
         indicators = analysis.indicators
+        summary = analysis.summary
 
+        # Technical Indicators
+        rsi = float(indicators.get("RSI", 50))
+        ema20 = float(indicators.get("EMA20", curr_price))
         high_val = float(indicators.get("high", curr_price + 3.0))
         low_val = float(indicators.get("low", curr_price - 3.0))
+        
+        tv_buy_votes = summary.get("BUY", 0)
+        tv_sell_votes = summary.get("SELL", 0)
 
-        if curr_price > high_val:
-            structure_signal = "BOS (Bullish Breakout)"
-            structure_note = f"Trading above key resistance zone (${high_val:.2f})"
+        # Multi-Confluence Decision Engine
+        if curr_price > ema20 and rsi > 52 and tv_buy_votes >= tv_sell_votes:
             bias = "BUY"
-        elif curr_price < low_val:
-            structure_signal = "BOS (Bearish Breakdown)"
-            structure_note = f"Trading below key support zone (${low_val:.2f})"
+            structure_signal = "Bullish Order Block Retention"
+            structure_note = f"Price holding above EMA20 (${ema20:.2f}) with RSI at {rsi:.1f}"
+        elif curr_price < ema20 and rsi < 48 and tv_sell_votes >= tv_buy_votes:
             bias = "SELL"
+            structure_signal = "Bearish Supply Rejection"
+            structure_note = f"Price trading below EMA20 (${ema20:.2f}) with RSI at {rsi:.1f}"
         else:
-            midpoint = (high_val + low_val) / 2
-            if curr_price > midpoint:
-                structure_signal = "Bullish Order Block Test"
-                structure_note = f"Holding above demand zone (${low_val:.2f})"
+            # Range / Neutral fallback
+            if curr_price > (high_val + low_val) / 2:
                 bias = "BUY"
+                structure_signal = "Bullish Liquidity Sweep"
+                structure_note = f"Rebound from local demand near ${low_val:.2f}"
             else:
-                structure_signal = "Bearish Supply Reaction"
-                structure_note = f"Rejecting below supply zone (${high_val:.2f})"
                 bias = "SELL"
+                structure_signal = "Bearish Resistance Reject"
+                structure_note = f"Pullback from key resistance near ${high_val:.2f}"
 
-        return curr_price, bias, structure_signal, structure_note
+        tv_consensus = summary.get("RECOMMENDATION", "NEUTRAL")
+        return curr_price, bias, structure_signal, structure_note, tv_consensus
 
     except Exception:
-        return curr_price, "SELL", "Bearish Supply Reaction", "Rejecting below key resistance"
-
-
-def get_tradingview_prediction(style):
-    timeframe = Interval.INTERVAL_5_MINUTES if style in ["scalp", "scalping"] else Interval.INTERVAL_1_HOUR
-    try:
-        handler = TA_Handler(symbol="XAUUSD", screener="forex", exchange="OANDA", interval=timeframe)
-        analysis = handler.get_analysis()
-        return analysis.summary.get("RECOMMENDATION", "NEUTRAL")
-    except Exception:
-        return "NEUTRAL"
+        return curr_price, "SELL", "Bearish Supply Reaction", "Rejecting resistance zone", "NEUTRAL"
 
 
 @bot.message_handler(commands=['start', 'help'])
 def send_welcome(message):
     welcome_text = (
-        "🤖 *Real-Time Spot Gold (XAUUSD) Bot*\n\n"
+        "🤖 *Legend Of All Trade Bot*\n\n"
         "Commands:\n"
         "• `/gold` — Live Spot Price\n"
-        "• `/entry <balance> <style>` — Structure setup & entry points\n\n"
-        "*Usage Examples:*\n"
-        "• `/entry 100 scalp` — 5-minute micro-structure\n"
-        "• `/entry 100 day` — 1-hour macro-structure"
+        "• `/entry <balance> <style>` — High-Confluence Setup\n\n"
+        "*Examples:*\n"
+        "• `/entry 100 scalp` — 5M Confluence\n"
+        "• `/entry 100 day` — 1H Confluence"
     )
     bot.reply_to(message, welcome_text, parse_mode="Markdown")
 
@@ -121,9 +114,9 @@ def send_welcome(message):
 def send_gold_price(message):
     try:
         price = get_live_xauusd_price()
-        bot.reply_to(message, f"🌕 *Live XAUUSD Spot:* `${price:.2f}`", parse_mode="Markdown")
+        bot.reply_to(message, f"🟡 *Live XAUUSD Spot:* `${price:.2f}`", parse_mode="Markdown")
     except Exception as e:
-        bot.reply_to(message, f"❌ Failed to fetch price: {e}")
+        bot.reply_to(message, f"❌ Error: {e}")
 
 
 @bot.message_handler(commands=['entry'])
@@ -131,23 +124,22 @@ def send_entry_setup(message):
     try:
         args = message.text.split()
         if len(args) < 2:
-            bot.reply_to(message, "⚠️ Provide balance and style.\n*Examples:*\n`/entry 100 scalp`\n`/entry 100 day`", parse_mode="Markdown")
+            bot.reply_to(message, "⚠️ Provide balance and style.\n*Example:* `/entry 100 scalp`", parse_mode="Markdown")
             return
 
         balance = float(args[1])
         style = args[2].lower() if len(args) >= 3 else "day"
 
-        price, trend, structure_signal, structure_note = get_market_structure(style)
-        tv_consensus = get_tradingview_prediction(style)
+        price, trend, structure_signal, structure_note, tv_consensus = get_market_structure(style)
 
         if style in ["scalp", "scalping"]:
             style_label = "⚡ SCALPING (5M Structure)"
-            sl_dist = 2.5
-            tp_dist = 5.0
+            sl_dist = 2.0  # Tightened 20-pip SL for scalps
+            tp_dist = 5.0  # 50-pip TP (1:2.5 Risk-Reward)
         else:
             style_label = "📈 DAY TRADING (1H Structure)"
-            sl_dist = 5.0
-            tp_dist = 10.0
+            sl_dist = 4.0  # 40-pip SL
+            tp_dist = 10.0 # 100-pip TP (1:2.5 Risk-Reward)
 
         if trend == "BUY":
             sl = round(price - sl_dist, 2)
@@ -191,4 +183,4 @@ def send_entry_setup(message):
 
 if __name__ == "__main__":
     bot.infinity_polling()
-            
+                      
