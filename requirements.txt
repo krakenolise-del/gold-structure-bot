@@ -1,2 +1,4 @@
-requests
 pyTelegramBotAPI
+requests
+tradingview_ta
+pandas
