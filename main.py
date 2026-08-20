@@ -49,7 +49,7 @@ def get_live_xauusd_price():
     except Exception:
         pass
 
-    return 4523.50
+    return None
 
 
 def calculate_volume_profile(num_bars=40, num_bins=15):
@@ -105,20 +105,30 @@ def get_ta_data(interval):
         analysis = handler.get_analysis()
         return analysis.indicators, analysis.summary
     except Exception:
-        return {}, {}
+        return None, None
 
 
-def analyze_aggressive_m15():
-    """Aggressive Execution Engine with Micro-Shift Detection."""
+def analyze_candle_precision():
+    """Precise Candle Movement & Multi-Timeframe Engine."""
     curr_price = get_live_xauusd_price()
-
     m15_ind, m15_sum = get_ta_data(Interval.INTERVAL_15_MINUTES)
+    m5_ind, m5_sum = get_ta_data(Interval.INTERVAL_5_MINUTES)
 
-    # Short-term EMA for immediate momentum detection
-    ema10 = float(m15_ind.get("EMA10", curr_price))
-    ema20 = float(m15_ind.get("EMA20", curr_price))
-    ema50 = float(m15_ind.get("EMA50", curr_price))
-    rsi = float(m15_ind.get("RSI", 50))
+    # STRICT CHECK: If live data fails, abort signal instead of guessing
+    if not curr_price or not m15_ind or not m5_ind:
+        return None, "NO_DATA", "API Fetch Error", "Live feed timeout. Re-try in a few seconds.", "NEUTRAL", 3.0, 0, 0, 0
+
+    # Candle Open vs Current Price
+    m15_open = float(m15_ind.get("open", curr_price))
+    m5_open = float(m5_ind.get("open", curr_price))
+
+    # Dynamic Moving Averages
+    ema10_m15 = float(m15_ind.get("EMA10", curr_price))
+    ema20_m15 = float(m15_ind.get("EMA20", curr_price))
+    ema10_m5 = float(m5_ind.get("EMA10", curr_price))
+    
+    rsi_m15 = float(m15_ind.get("RSI", 50.0))
+    rsi_m5 = float(m5_ind.get("RSI", 50.0))
     atr = float(m15_ind.get("ATR", 3.0))
     if atr <= 0:
         atr = 3.0
@@ -129,57 +139,60 @@ def analyze_aggressive_m15():
 
     buy_points, sell_points = 0, 0
 
-    # 1. Immediate Micro-Shift Filter (Heavy Weight)
-    if curr_price < ema10:
-        sell_points += 3
+    # 1. Active M15 Candle Direction (Heavy Weight +4)
+    if curr_price < m15_open:
+        sell_points += 4  # Bearish M15 candle currently forming
     else:
-        buy_points += 3
+        buy_points += 4   # Bullish M15 candle currently forming
 
-    # 2. Medium Trend Filter
-    if curr_price >= ema20:
-        buy_points += 2
+    # 2. Active M5 Micro-Candle Direction (Heavy Weight +3)
+    if curr_price < m5_open:
+        sell_points += 3  # Immediate M5 drop
     else:
+        buy_points += 3   # Immediate M5 push
+
+    # 3. Micro-EMA Alignment (M5 & M15 Fast Averages)
+    if curr_price < ema10_m5:
+        sell_points += 2
+    else:
+        buy_points += 2
+
+    if curr_price < ema10_m15:
+        sell_points += 2
+    else:
+        buy_points += 2
+
+    # 4. Strict RSI Momentum Confirmation
+    if rsi_m15 > 53 and rsi_m5 > 50:
+        buy_points += 2
+    elif rsi_m15 < 47 and rsi_m5 < 50:
         sell_points += 2
 
-    # 3. Macro Trend Filter
-    if curr_price > ema50:
-        buy_points += 1
-    else:
-        sell_points += 1
-
-    # 4. Momentum Oscillator Filter (RSI Buffer)
-    if rsi >= 52:
-        buy_points += 2
-    elif rsi <= 48:
-        sell_points += 2
-
-    # 5. Volume Profile Structure
-    if curr_price >= poc_price:
-        buy_points += 1
-    else:
-        sell_points += 1
-
-    # Absolute Buy/Sell Split
-    if buy_points > sell_points:
-        bias = "BUY"
-        strategy_name = "Aggressive M15 Bullish Expansion"
-        detail = f"Price above Fast EMA Structure | RSI: {rsi:.1f} | ATR: ${atr:.2f}"
-    else:
+    # Determination of Bias
+    if sell_points > buy_points:
         bias = "SELL"
-        strategy_name = "Aggressive M15 Bearish Micro-Shift"
-        detail = f"Price breaking below Fast EMA | RSI: {rsi:.1f} | ATR: ${atr:.2f}"
+        strategy_name = "Candle-Momentum Bearish Shift"
+        detail = f"Active M15/M5 Red Candle | RSI M15: {rsi_m15:.1f} | M5 Open: ${m5_open:.2f}"
+    elif buy_points > sell_points:
+        bias = "BUY"
+        strategy_name = "Candle-Momentum Bullish Expansion"
+        detail = f"Active M15/M5 Green Candle | RSI M15: {rsi_m15:.1f} | M5 Open: ${m5_open:.2f}"
+    else:
+        bias = "NEUTRAL"
+        strategy_name = "Indecisive Candle Action"
+        detail = "Market consolidating between M5 and M15 levels."
 
-    tv_consensus = m15_sum.get("RECOMMENDATION", "NEUTRAL")
+    tv_consensus = m15_sum.get("RECOMMENDATION", "NEUTRAL") if m15_sum else "NEUTRAL"
     return curr_price, bias, strategy_name, detail, tv_consensus, atr, poc_price, vah_price, val_price
 
 
 @bot.message_handler(commands=['start', 'help'])
 def send_welcome(message):
     welcome_text = (
-        "🤖 *Legend Of All Trade (Aggressive Engine)*\n\n"
+        "🤖 *Legend Of All Trade (Candle Precision Engine)*\n\n"
         "Commands:\n"
         "• `/gold` — Live Spot Price\n"
-        "• `/entry <balance>` — Immediate Active Buy/Sell Trade"
+        "• `/entry <balance>` — Immediate Active Trade Setup"
     )
     bot.reply_to(message, welcome_text, parse_mode="Markdown")
 
@@ -188,7 +201,10 @@ def send_welcome(message):
 def send_gold_price(message):
     try:
         price = get_live_xauusd_price()
-        bot.reply_to(message, f"🟡 *Live XAUUSD Spot:* `${price:.2f}`", parse_mode="Markdown")
+        if price:
+            bot.reply_to(message, f"🟡 *Live XAUUSD Spot:* `${price:.2f}`", parse_mode="Markdown")
+        else:
+            bot.reply_to(message, "⚠️ Unable to fetch live price right now. Try again shortly.")
     except Exception as e:
         bot.reply_to(message, f"❌ Error: {e}")
 
@@ -202,10 +218,18 @@ def send_entry_setup(message):
             return
 
         balance = float(args[1])
-        price, trend, strategy_name, detail, tv_consensus, atr, poc, vah, val = analyze_aggressive_m15()
+        price, trend, strategy_name, detail, tv_consensus, atr, poc, vah, val = analyze_candle_precision()
 
-        sl_dist = round(atr * 1.2, 2)
-        tp_dist = round(sl_dist * 2.2, 2)
+        if trend == "NO_DATA":
+            bot.reply_to(message, "⚠️ *Market Data Fetch Timed Out.*\nPlease re-send `/entry` in 5 seconds to get an accurate reading.", parse_mode="Markdown")
+            return
+
+        if trend == "NEUTRAL":
+            bot.reply_to(message, "⚠️ *Market is currently indecisive.* No clear M5/M15 candle direction. Hold trades.", parse_mode="Markdown")
+            return
+
+        sl_dist = round(atr * 1.0, 2)
+        tp_dist = round(sl_dist * 2.0, 2)
 
         if trend == "BUY":
             sl_price = round(price - sl_dist, 2)
@@ -222,14 +246,14 @@ def send_entry_setup(message):
             lot_size = 0.01
 
         response = (
-            f"🏛 *AGGRESSIVE EXECUTION (NO WAIT)*\n"
+            f"🏛 *CANDLE PRECISION EXECUTION*\n"
             f"━━━━━━━━━━━━━━━━━━\n"
             f"• *Live Spot Price:* `${price:.2f}`\n\n"
             f"📊 *Volume Profile & Structure:*\n"
             f"• *Point of Control (POC):* `${poc:.2f}`\n"
             f"• *Value Area High (VAH):* `${vah:.2f}`\n"
             f"• *Value Area Low (VAL):* `${val:.2f}`\n\n"
-            f"📐 *Market Analysis:*\n"
+            f"📐 *Real-Time Candle Analysis:*\n"
             f"• *Pattern:* `{strategy_name}`\n"
             f"• *Details:* _{detail}_\n"
             f"• *Consensus:* `{tv_consensus}`\n\n"
@@ -249,4 +273,3 @@ def send_entry_setup(message):
         bot.reply_to(message, f"❌ Execution Error: {e}")
 
 bot.infinity_polling()
-    
