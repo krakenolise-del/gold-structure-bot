@@ -1,25 +1,18 @@
 import os
 import time
-import threading
-from http.server import HTTPServer, BaseHTTPRequestHandler
 import requests
+from threading import Thread
+from http.server import HTTPServer, BaseHTTPRequestHandler
+from telebot import TeleBot
 
-# CONFIGURATION
+# Telegram Bot Token
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
+bot = TeleBot(BOT_TOKEN)
 
-# GLOBAL MEMORY FOR BACKGROUND STRUCTURE PARSING
-LATEST_STRUCTURE = {
-    "current_price": None,
-    "trend": None,
-    "swing_high": None,
-    "swing_low": None,
-    "sl": None,
-    "tp": None,
-    "structure_desc": None,
-    "updated_at": 0
-}
+# Global Storage for Market Structure Engine
+LATEST_STRUCTURE = {}
 
-# 1. KEEP-ALIVE SERVER FOR RENDER
+# Simple Web Server to Keep Render Web Service Alive
 class HealthCheckHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -31,9 +24,10 @@ def run_web_server():
     server = HTTPServer(("0.0.0.0", port), HealthCheckHandler)
     server.serve_forever()
 
-threading.Thread(target=run_web_server, daemon=True).start()
+Thread(target=run_web_server, daemon=True).start()
 
-# 2. CONTINUOUS BACKGROUND STRUCTURE ENGINE
+
+# CONTINUOUS BACKGROUND STRUCTURE ENGINE
 def background_structure_engine():
     global LATEST_STRUCTURE
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
@@ -49,7 +43,10 @@ def background_structure_engine():
             lows = indicators.get('low', [])
             closes = indicators.get('close', [])
             
-            valid_candles = [(h, l, c) for h, l, c in zip(highs, lows, closes) if h is not None and l is not None and c is not None]
+            valid_candles = [
+                (h, l, c) for h, l, c in zip(highs, lows, closes) 
+                if h is not None and l is not None and c is not None
+            ]
             
             if len(valid_candles) >= 20:
                 recent_highs = [x[0] for x in valid_candles[-20:]]
@@ -86,96 +83,85 @@ def background_structure_engine():
             
         time.sleep(30)
 
-            print(f"Structure engine update error: {e}")
-            
-        time.sleep(60)
+Thread(target=background_structure_engine, daemon=True).start()
 
-threading.Thread(target=background_structure_engine, daemon=True).start()
 
-# 3. TELEGRAM MESSAGING HELPER
-def send_telegram_message(chat_id, message):
-    if not BOT_TOKEN:
-        return
-    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-    payload = {"chat_id": chat_id, "text": message, "parse_mode": "Markdown"}
+# TELEGRAM BOT COMMAND HANDLERS
+@bot.message_handler(commands=['start', 'help'])
+def send_welcome(message):
+    welcome_text = (
+        "🤖 *Market Structure Engine Active*\n\n"
+        "Commands:\n"
+        "• `/entry <balance>` - Calculates structure setup\n"
+        "• `/gold` - Instant XAUUSD price\n\n"
+        "_Example:_ `/entry 100`"
+    )
+    bot.reply_to(message, welcome_text, parse_mode="Markdown")
+
+@bot.message_handler(commands=['gold'])
+def get_gold_price(message):
+    if LATEST_STRUCTURE and "current_price" in LATEST_STRUCTURE:
+        price = LATEST_STRUCTURE["current_price"]
+        bot.reply_to(message, f"🌕 *XAUUSD Price:* ${price}", parse_mode="Markdown")
+    else:
+        bot.reply_to(message, "⚠️ Structure calculation warming up... Send /gold again in 15 seconds.")
+
+@bot.message_handler(commands=['entry'])
+def calculate_entry(message):
     try:
-        requests.post(url, json=payload, timeout=10)
-    except Exception as e:
-        print(f"Error sending message: {e}")
-
-# 4. COMMAND LISTENER
-def poll_telegram_commands():
-    last_update_id = 0
-    print("Listening for structure commands...")
-    while True:
-        try:
-            url = f"https://api.telegram.org/bot{BOT_TOKEN}/getUpdates?offset={last_update_id}&timeout=30"
-            res = requests.get(url, timeout=35).json()
+        args = message.text.split()
+        if len(args) < 2:
+            bot.reply_to(message, "⚠️ Please provide your account balance.\n*Example:* `/entry 100`", parse_mode="Markdown")
+            return
             
-            if "result" in res:
-                for update in res["result"]:
-                    last_update_id = update["update_id"] + 1
-                    
-                    if "message" in update and "text" in update["message"]:
-                        chat_id = update["message"]["chat"]["id"]
-                        text = update["message"]["text"].strip()
-                        parts = text.split()
-                        cmd = parts[0].lower()
-                        
-                        if cmd in ["/start", "start"]:
-                            msg = (
-                                "🤖 *Market Structure Engine Active*\n\n"
-                                "Commands:\n"
-                                "• `/entry <balance>` - Calculates structure setup\n"
-                                "• `/gold` - Instant XAUUSD price\n\n"
-                                "_Example:_ `/entry 100`"
-                            )
-                            send_telegram_message(chat_id, msg)
-                            
-                        elif cmd in ["/gold", "gold"]:
-                            if LATEST_STRUCTURE["current_price"]:
-                                send_telegram_message(chat_id, f"🪙 *XAUUSD Price:* `${LATEST_STRUCTURE['current_price']}`")
-                            else:
-                                send_telegram_message(chat_id, "⚠️ Structure calculation warming up...")
-                                
-                        elif cmd == "/entry":
-                            if len(parts) < 2:
-                                send_telegram_message(chat_id, "⚠️ *Format:* `/entry <balance>`\n*Example:* `/entry 100`")
-                            else:
-                                try:
-                                    balance = float(parts[1])
-                                    data = LATEST_STRUCTURE
-                                    
-                                    if data["current_price"]:
-                                        risk_amount = balance * 0.01
-                                        price_diff = abs(data['current_price'] - data['sl'])
-                                        pips = price_diff * 10
-                                        lot_size = round(max(0.01, risk_amount / (pips * 10.0)), 2) if pips > 0 else 0.01
-                                        
-                                        msg = (
-                                            f"🚨 *STRUCTURE ORDER: {data['trend']} XAUUSD*\n\n"
-                                            f"📍 *Entry Price:* `${data['current_price']}`\n"
-                                            f"🛑 *Stop Loss:* `${data['sl']}`\n"
-                                            f"🎯 *Take Profit:* `${data['tp']}`\n"
-                                            f"📊 *Lot Size:* `{lot_size}`\n\n"
-                                            f"🔍 *Structure:* {data['structure_desc']}\n"
-                                            f"📈 *Swing High:* `${data['swing_high']}` | *Swing Low:* `${data['swing_low']}`"
-                                        )
-                                        send_telegram_message(chat_id, msg)
-                                    else:
-                                        send_telegram_message(chat_id, "⚠️ Background engine starting... try again in 10 seconds.")
-                                except ValueError:
-                                    send_telegram_message(chat_id, "⚠️ Enter a valid number for balance.")
-                                    
-        except Exception:
-            time.sleep(2)
-        time.sleep(1)
+        balance = float(args[1])
+        
+        if not LATEST_STRUCTURE or "current_price" not in LATEST_STRUCTURE:
+            bot.reply_to(message, "⚠️ Market structure engine is loading... Try again in a few seconds.")
+            return
 
-threading.Thread(target=poll_telegram_commands, daemon=True).start()
+        price = LATEST_STRUCTURE["current_price"]
+        trend = LATEST_STRUCTURE["trend"]
+        sl = LATEST_STRUCTURE["sl"]
+        tp = LATEST_STRUCTURE["tp"]
+        desc = LATEST_STRUCTURE["structure_desc"]
 
-def main():
-    while True:
-        time.sleep(900)
+        # Risk 2% of total balance
+        risk_amount = balance * 0.02
+        sl_distance = abs(price - sl)
+        
+        if sl_distance == 0:
+            sl_distance = 1.0
 
+        # Lot size formula for Gold (1 Standard Lot = $100 per $1 move)
+        lot_size = round(risk_amount / (sl_distance * 100), 2)
+        if lot_size < 0.01:
+            lot_size = 0.01
+
+        response = (
+            f"📊 *XAUUSD STRUCTURE SETUP*\n"
+            f"━━━━━━━━━━━━━━━━━━\n"
+            f"• *Current Price:* ${price}\n"
+            f"• *Bias:* {trend} ({desc})\n\n"
+            f"🎯 *Trade Parameters:*\n"
+            f"• *Signal:* {trend}\n"
+            f"• *Entry:* ${price}\n"
+            f"• *Stop Loss (SL):* ${sl}\n"
+            f"• *Take Profit (TP):* ${tp}\n\n"
+            f"🛡 *Risk Management (2% Risk):*\n"
+            f"• *Account Balance:* ${balance:.2f}\n"
+            f"• *Max Risk:* ${risk_amount:.2f}\n"
+            f"• *Recommended Lot:* `{lot_size}` Lot\n"
+            f"━━━━━━━━━━━━━━━━━━"
+        )
+        bot.reply_to(message, response, parse_mode="Markdown")
+
+    except ValueError:
+        bot.reply_to(message, "⚠️ Invalid balance format. Send a number like `/entry 100`.", parse_mode="Markdown")
+    except Exception as e:
+        bot.reply_to(message, f"❌ Error processing setup: {e}")
+
+
+# START TELEGRAM BOT LOOP
 if __name__ == "__main__":
-    main()
+    bot.infinity_polling()
