@@ -37,7 +37,7 @@ threading.Thread(target=run_web_server, daemon=True).start()
 def background_structure_engine():
     global LATEST_STRUCTURE
     headers = {"User-Agent": "Mozilla/5.0"}
-    url = "https://query1.finance.yahoo.com/v8/finance/chart/GC=F?interval=15m&range=2d"
+    url = "https://query1.finance.yahoo.com/v8/finance/chart/XAUSD=X?interval=15m&range=2d"
     
     while True:
         try:
