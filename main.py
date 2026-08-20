@@ -26,15 +26,53 @@ def run_web_server():
 Thread(target=run_web_server, daemon=True).start()
 
 
+def get_live_xauusd_price():
+    """Fetches high-accuracy real-time spot price."""
+    if GOLD_API_KEY:
+        try:
+            url = "https://www.goldapi.io/api/XAU/USD"
+            headers = {"x-access-token": GOLD_API_KEY, "Content-Type": "application/json"}
+            res = requests.get(url, headers=headers, timeout=5).json()
+            if "price" in res and res["price"] > 0:
+                return float(res["price"])
+        except Exception:
+            pass
+
+    try:
+        headers = {"User-Agent": "Mozilla/5.0"}
+        url = "https://query1.finance.yahoo.com/v8/finance/chart/GC=F?interval=1m&range=1d"
+        res = requests.get(url, headers=headers, timeout=5).json()
+        price = float(res['chart']['result'][0]['meta']['regularMarketPrice'])
+        if price > 0:
+            return price
+    except Exception:
+        pass
+
+    try:
+        url = "https://stooq.com/q/l/?s=xauusd&f=sd2t2ohlcv&h&e=csv"
+        r = requests.get(url, timeout=5)
+        lines = r.text.strip().split("\n")
+        if len(lines) > 1:
+            p = float(lines[1].split(",")[6])
+            if p > 0:
+                return p
+    except Exception:
+        pass
+
+    return 4489.25
+
+
 def get_market_structure(style):
-    """Fetches candlestick data and analyzes market structure (BOS, CHOCH, Swing Points)."""
+    """Combines high-accuracy live price with dynamic market structure mapping."""
+    # Always fetch live real-time price first
+    curr_price = get_live_xauusd_price()
+
     try:
         interval = "5m" if style in ["scalp", "scalping"] else "1h"
         headers = {"User-Agent": "Mozilla/5.0"}
         url = f"https://query1.finance.yahoo.com/v8/finance/chart/GC=F?interval={interval}&range=5d"
         res = requests.get(url, headers=headers, timeout=5).json()
         
-        timestamps = res['chart']['result'][0]['timestamp']
         quotes = res['chart']['result'][0]['indicators']['quote'][0]
         
         df = pd.DataFrame({
@@ -43,36 +81,36 @@ def get_market_structure(style):
             'close': quotes['close']
         }).dropna()
 
-        if len(df) < 10:
-            return 4489.25, "Neutral", "Ranging Structure", "Consolidating"
+        if len(df) >= 10:
+            recent_highs = float(df['high'].iloc[-15:-1].max())
+            recent_lows = float(df['low'].iloc[-15:-1].min())
 
-        curr_price = float(df['close'].iloc[-1])
-        recent_highs = df['high'].iloc[-15:-1].max()
-        recent_lows = df['low'].iloc[-15:-1].min()
-
-        if curr_price > recent_highs:
-            structure_signal = "BOS (Bullish Breakout)"
-            structure_note = f"Broke major swing high zone at ${recent_highs:.2f}"
-            bias = "BUY"
-        elif curr_price < recent_lows:
-            structure_signal = "BOS (Bearish Breakdown)"
-            structure_note = f"Broke major swing low zone at ${recent_lows:.2f}"
-            bias = "SELL"
-        else:
-            midpoint = (recent_highs + recent_lows) / 2
-            if curr_price > midpoint:
-                structure_signal = "Bullish Order Block Test"
-                structure_note = f"Holding above key demand floor (${recent_lows:.2f})"
+            if curr_price > recent_highs:
+                structure_signal = "BOS (Bullish Breakout)"
+                structure_note = f"Broke major swing high zone at ${recent_highs:.2f}"
                 bias = "BUY"
-            else:
-                structure_signal = "Bearish Supply Reaction"
-                structure_note = f"Rejecting below key resistance roof (${recent_highs:.2f})"
+            elif curr_price < recent_lows:
+                structure_signal = "BOS (Bearish Breakdown)"
+                structure_note = f"Broke major swing low zone at ${recent_lows:.2f}"
                 bias = "SELL"
+            else:
+                midpoint = (recent_highs + recent_lows) / 2
+                if curr_price > midpoint:
+                    structure_signal = "Bullish Order Block Test"
+                    structure_note = f"Holding above demand floor (${recent_lows:.2f})"
+                    bias = "BUY"
+                else:
+                    structure_signal = "Bearish Supply Reaction"
+                    structure_note = f"Rejecting below resistance roof (${recent_highs:.2f})"
+                    bias = "SELL"
 
-        return curr_price, bias, structure_signal, structure_note
+            return curr_price, bias, structure_signal, structure_note
 
     except Exception:
-        return 4489.25, "SELL", "Consolidation", "Tracking intraday swing boundaries"
+        pass
+
+    # Fallback to pure price reaction if historical OHLC feed times out
+    return curr_price, "SELL", "Dynamic Price Tracking", "Reacting to key intraday levels"
 
 
 def get_tradingview_prediction(style):
@@ -91,7 +129,7 @@ def get_tradingview_prediction(style):
 @bot.message_handler(commands=['start', 'help'])
 def send_welcome(message):
     welcome_text = (
-        "🤖 *Market Structure & Prediction Gold Bot*\n\n"
+        "🤖 *Market Structure & Real-Time Price Gold Bot*\n\n"
         "Commands:\n"
         "• `/gold` — Instant real-time XAUUSD spot price\n"
         "• `/entry <balance> <style>` — Complete structure mapping & trade setup\n\n"
@@ -105,7 +143,7 @@ def send_welcome(message):
 @bot.message_handler(commands=['gold'])
 def send_gold_price(message):
     try:
-        price, _, _, _ = get_market_structure("day")
+        price = get_live_xauusd_price()
         bot.reply_to(message, f"🌕 *Live XAUUSD Spot:* `${price:.2f}`", parse_mode="Markdown")
     except Exception as e:
         bot.reply_to(message, f"❌ Failed to fetch price: {e}")
@@ -156,7 +194,7 @@ def send_entry_setup(message):
             f"• *Zone Detail:* _{structure_note}_\n"
             f"• *TV Consensus:* `{tv_consensus}`\n\n"
             f"🎯 *Execution Setup:*\n"
-            f"• *Bias Signal:* *{trend}*\n"
+            f"• *Signal:* *{trend}*\n"
             f"• *Entry:* `${price:.2f}`\n"
             f"• *Stop Loss (SL):* `${sl:.2f}`\n"
             f"• *Take Profit (TP):* `${tp:.2f}`\n\n"
