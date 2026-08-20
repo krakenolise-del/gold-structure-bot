@@ -109,11 +109,13 @@ def get_ta_data(interval):
 
 
 def analyze_aggressive_m15():
-    """Aggressive Execution Engine (Forces Buy/Sell Bias Always)."""
+    """Aggressive Execution Engine with Micro-Shift Detection."""
     curr_price = get_live_xauusd_price()
 
     m15_ind, m15_sum = get_ta_data(Interval.INTERVAL_15_MINUTES)
 
+    # Short-term EMA for immediate momentum detection
+    ema10 = float(m15_ind.get("EMA10", curr_price))
     ema20 = float(m15_ind.get("EMA20", curr_price))
     ema50 = float(m15_ind.get("EMA50", curr_price))
     rsi = float(m15_ind.get("RSI", 50))
@@ -127,36 +129,45 @@ def analyze_aggressive_m15():
 
     buy_points, sell_points = 0, 0
 
-    # Aggressive Trend Weighting
+    # 1. Immediate Micro-Shift Filter (Heavy Weight)
+    if curr_price < ema10:
+        sell_points += 3
+    else:
+        buy_points += 3
+
+    # 2. Medium Trend Filter
     if curr_price >= ema20:
         buy_points += 2
     else:
         sell_points += 2
 
+    # 3. Macro Trend Filter
     if curr_price > ema50:
         buy_points += 1
     else:
         sell_points += 1
 
-    if rsi >= 50:
-        buy_points += 1
-    else:
-        sell_points += 1
+    # 4. Momentum Oscillator Filter (RSI Buffer)
+    if rsi >= 52:
+        buy_points += 2
+    elif rsi <= 48:
+        sell_points += 2
 
+    # 5. Volume Profile Structure
     if curr_price >= poc_price:
         buy_points += 1
     else:
         sell_points += 1
 
-    # Absolute Buy/Sell Split (Zero WAIT Allowed)
-    if buy_points >= sell_points:
+    # Absolute Buy/Sell Split
+    if buy_points > sell_points:
         bias = "BUY"
-        strategy_name = "Aggressive M15 Bullish Momentum"
-        detail = f"Price above EMA/POC Structure | RSI: {rsi:.1f} | ATR: ${atr:.2f}"
+        strategy_name = "Aggressive M15 Bullish Expansion"
+        detail = f"Price above Fast EMA Structure | RSI: {rsi:.1f} | ATR: ${atr:.2f}"
     else:
         bias = "SELL"
-        strategy_name = "Aggressive M15 Bearish Rejection"
-        detail = f"Price below EMA/POC Structure | RSI: {rsi:.1f} | ATR: ${atr:.2f}"
+        strategy_name = "Aggressive M15 Bearish Micro-Shift"
+        detail = f"Price breaking below Fast EMA | RSI: {rsi:.1f} | ATR: ${atr:.2f}"
 
     tv_consensus = m15_sum.get("RECOMMENDATION", "NEUTRAL")
     return curr_price, bias, strategy_name, detail, tv_consensus, atr, poc_price, vah_price, val_price
@@ -234,13 +245,8 @@ def send_entry_setup(message):
             f"━━━━━━━━━━━━━━━━━━"
         )
         bot.reply_to(message, response, parse_mode="Markdown")
-
-    except ValueError:
-        bot.reply_to(message, "⚠️ Enter a valid numerical balance, e.g., `/entry 10`.", parse_mode="Markdown")
     except Exception as e:
-        bot.reply_to(message, f"❌ Error: {e}")
+        bot.reply_to(message, f"❌ Execution Error: {e}")
 
-
-if __name__ == "__main__":
-    bot.infinity_polling()
+bot.infinity_polling()
     
