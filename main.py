@@ -49,7 +49,7 @@ def get_live_xauusd_price():
     except Exception:
         pass
 
-    return 4481.90
+    return 4523.50
 
 
 def calculate_volume_profile(num_bars=40, num_bins=15):
@@ -108,14 +108,12 @@ def get_ta_data(interval):
         return {}, {}
 
 
-def analyze_master_confluence_m15():
-    """6-Layer Master Confluence Engine."""
+def analyze_aggressive_m15():
+    """Aggressive Execution Engine (Forces Buy/Sell Bias Always)."""
     curr_price = get_live_xauusd_price()
 
     m15_ind, m15_sum = get_ta_data(Interval.INTERVAL_15_MINUTES)
-    h1_ind, _ = get_ta_data(Interval.INTERVAL_1_HOUR)
 
-    # Core Technical Indicators
     ema20 = float(m15_ind.get("EMA20", curr_price))
     ema50 = float(m15_ind.get("EMA50", curr_price))
     rsi = float(m15_ind.get("RSI", 50))
@@ -123,88 +121,42 @@ def analyze_master_confluence_m15():
     if atr <= 0:
         atr = 3.0
 
-    # Ichimoku Cloud Elements
-    tenkan = float(m15_ind.get("Ichimoku.BLine", curr_price))
-    kijun = float(m15_ind.get("Ichimoku.CLine", curr_price))
-
-    # Candlestick Price Action & Wick Rejection
-    open_p = float(m15_ind.get("open", curr_price))
-    high_p = float(m15_ind.get("high", curr_price + 1.0))
-    low_p = float(m15_ind.get("low", curr_price - 1.0))
-    close_p = float(m15_ind.get("close", curr_price))
-
-    candle_range = max(high_p - low_p, 0.1)
-    lower_wick = min(open_p, close_p) - low_p
-    upper_wick = high_p - max(open_p, close_p)
-
-    bullish_rejection = (lower_wick / candle_range) > 0.45
-    bearish_rejection = (upper_wick / candle_range) > 0.45
-
-    # Smart Money Concepts (FVG / Imbalance Check)
-    high_2 = float(m15_ind.get("high[2]", curr_price + 2.0))
-    low_0 = float(m15_ind.get("low", curr_price - 1.0))
-    low_2 = float(m15_ind.get("low[2]", curr_price - 2.0))
-    high_0 = float(m15_ind.get("high", curr_price + 1.0))
-
-    bullish_fvg = low_0 > high_2
-    bearish_fvg = high_0 < low_2
-
-    # Volume Profile Engine
     poc_price, vah_price, val_price = calculate_volume_profile()
     if not poc_price:
         poc_price, vah_price, val_price = curr_price, curr_price + 3.0, curr_price - 3.0
 
     buy_points, sell_points = 0, 0
 
-    # Strategy 1: Volume Profile Value Areas
-    if curr_price <= val_price:
-        buy_points += 3
-    elif curr_price >= vah_price:
-        sell_points += 3
-
-    # Strategy 2: SMC Fair Value Gap (FVG)
-    if bullish_fvg or (curr_price > poc_price and curr_price < vah_price):
+    # Aggressive Trend Weighting
+    if curr_price >= ema20:
         buy_points += 2
-    elif bearish_fvg or (curr_price < poc_price and curr_price > val_price):
-        sell_points += 2
-
-    # Strategy 3: Price Action Rejection Wicks
-    if bullish_rejection:
-        buy_points += 2
-    elif bearish_rejection:
-        sell_points += 2
-
-    # Strategy 4: Ichimoku Cloud Alignment
-    if curr_price > tenkan > kijun:
-        buy_points += 1
-    elif curr_price < tenkan < kijun:
-        sell_points += 1
-
-    # Strategy 5: Dynamic Moving Average Stack
-    if curr_price > ema20 > ema50:
-        buy_points += 1
-    elif curr_price < ema20 < ema50:
-        sell_points += 1
-
-    # Strategy 6: RSI Momentum Filter
-    if 52 < rsi < 70:
-        buy_points += 1
-    elif 30 < rsi < 48:
-        sell_points += 1
-
-    # Master Confluence Threshold Execution (Requires >= 6 Points)
-    if buy_points >= 6 and buy_points > sell_points:
-        bias = "BUY"
-        strategy_name = "Master Bullish Confluence (SMC + VP + Wick Rejection)"
-        detail = f"VAL Discount | Bullish Wick/FVG Detected | Ichimoku & EMA Stacked | ATR: ${atr:.2f}"
-    elif sell_points >= 6 and sell_points > buy_points:
-        bias = "SELL"
-        strategy_name = "Master Bearish Confluence (SMC + VP + Supply Rejection)"
-        detail = f"VAH Premium | Bearish Wick/FVG Detected | Ichimoku & EMA Dropping | ATR: ${atr:.2f}"
     else:
-        bias = "WAIT"
-        strategy_name = "Low Confluence / Market Ranging"
-        detail = f"Score Insufficient (Buy: {buy_points}/10, Sell: {sell_points}/10) | Consolidating near POC (${poc_price:.2f})"
+        sell_points += 2
+
+    if curr_price > ema50:
+        buy_points += 1
+    else:
+        sell_points += 1
+
+    if rsi >= 50:
+        buy_points += 1
+    else:
+        sell_points += 1
+
+    if curr_price >= poc_price:
+        buy_points += 1
+    else:
+        sell_points += 1
+
+    # Absolute Buy/Sell Split (Zero WAIT Allowed)
+    if buy_points >= sell_points:
+        bias = "BUY"
+        strategy_name = "Aggressive M15 Bullish Momentum"
+        detail = f"Price above EMA/POC Structure | RSI: {rsi:.1f} | ATR: ${atr:.2f}"
+    else:
+        bias = "SELL"
+        strategy_name = "Aggressive M15 Bearish Rejection"
+        detail = f"Price below EMA/POC Structure | RSI: {rsi:.1f} | ATR: ${atr:.2f}"
 
     tv_consensus = m15_sum.get("RECOMMENDATION", "NEUTRAL")
     return curr_price, bias, strategy_name, detail, tv_consensus, atr, poc_price, vah_price, val_price
@@ -213,10 +165,10 @@ def analyze_master_confluence_m15():
 @bot.message_handler(commands=['start', 'help'])
 def send_welcome(message):
     welcome_text = (
-        "🤖 *Legend Of All Trade (Master Engine)*\n\n"
+        "🤖 *Legend Of All Trade (Aggressive Engine)*\n\n"
         "Commands:\n"
         "• `/gold` — Live Spot Price\n"
-        "• `/entry <balance>` — Execute 6-Layer Master Confluence"
+        "• `/entry <balance>` — Immediate Active Buy/Sell Trade"
     )
     bot.reply_to(message, welcome_text, parse_mode="Markdown")
 
@@ -235,11 +187,11 @@ def send_entry_setup(message):
     try:
         args = message.text.split()
         if len(args) < 2:
-            bot.reply_to(message, "⚠️ Provide balance.\n*Example:* `/entry 100`", parse_mode="Markdown")
+            bot.reply_to(message, "⚠️ Provide balance.\n*Example:* `/entry 10`", parse_mode="Markdown")
             return
 
         balance = float(args[1])
-        price, trend, strategy_name, detail, tv_consensus, atr, poc, vah, val = analyze_master_confluence_m15()
+        price, trend, strategy_name, detail, tv_consensus, atr, poc, vah, val = analyze_aggressive_m15()
 
         sl_dist = round(atr * 1.2, 2)
         tp_dist = round(sl_dist * 2.2, 2)
@@ -247,27 +199,19 @@ def send_entry_setup(message):
         if trend == "BUY":
             sl_price = round(price - sl_dist, 2)
             tp_price = round(price + tp_dist, 2)
-            action_text = "🟢 **ACTION: OPEN BUY ORDER**"
-            sl_str = f"${sl_price:.2f}"
-            tp_str = f"${tp_price:.2f}"
-        elif trend == "SELL":
+            action_text = "🟢 **ACTION: OPEN BUY ORDER NOW**"
+        else:
             sl_price = round(price + sl_dist, 2)
             tp_price = round(price - tp_dist, 2)
-            action_text = "🔴 **ACTION: OPEN SELL ORDER**"
-            sl_str = f"${sl_price:.2f}"
-            tp_str = f"${tp_price:.2f}"
-        else:
-            action_text = "⚠️ **ACTION: NO TRADE (HOLD/WAIT)**"
-            sl_str = f"N/A (Hold State)"
-            tp_str = f"N/A (Hold State)"
+            action_text = "🔴 **ACTION: OPEN SELL ORDER NOW**"
 
         risk_amount = balance * 0.02
-        lot_size = round(risk_amount / (sl_dist * 100), 2) if sl_dist > 0 else 0.01
+        lot_size = round(risk_amount / (sl_dist * 100), 2)
         if lot_size < 0.01:
             lot_size = 0.01
 
         response = (
-            f"🏛 *MASTER CONFLUENCE ANALYSIS (M15)*\n"
+            f"🏛 *AGGRESSIVE EXECUTION (NO WAIT)*\n"
             f"━━━━━━━━━━━━━━━━━━\n"
             f"• *Live Spot Price:* `${price:.2f}`\n\n"
             f"📊 *Volume Profile & Structure:*\n"
@@ -281,8 +225,8 @@ def send_entry_setup(message):
             f"🎯 *Execution:* {action_text}\n"
             f"• *Bias Signal:* *{trend}*\n"
             f"• *Entry:* `${price:.2f}`\n"
-            f"• *Dynamic SL:* `{sl_str}`\n"
-            f"• *Dynamic TP:* `{tp_str}`\n\n"
+            f"• *Dynamic SL:* `${sl_price:.2f}`\n"
+            f"• *Dynamic TP:* `${tp_price:.2f}`\n\n"
             f"🛡 *Risk Management (2% Risk):*\n"
             f"• *Account Balance:* `${balance:.2f}`\n"
             f"• *Risk Amount:* `${risk_amount:.2f}`\n"
@@ -292,11 +236,11 @@ def send_entry_setup(message):
         bot.reply_to(message, response, parse_mode="Markdown")
 
     except ValueError:
-        bot.reply_to(message, "⚠️ Enter a valid numerical balance, e.g., `/entry 100`.", parse_mode="Markdown")
+        bot.reply_to(message, "⚠️ Enter a valid numerical balance, e.g., `/entry 10`.", parse_mode="Markdown")
     except Exception as e:
         bot.reply_to(message, f"❌ Error: {e}")
 
 
 if __name__ == "__main__":
     bot.infinity_polling()
-        
+    
