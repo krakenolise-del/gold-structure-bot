@@ -9,16 +9,22 @@ import yfinance as yf
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 CHAT_ID = os.environ.get("CHAT_ID")
 
-# 1. KEEP-ALIVE WEB SERVER (For Render Health Checks)
+# 1. KEEP-ALIVE WEB SERVER (Listening on Render's assigned port)
 class HealthCheckHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.end_headers()
         self.wfile.write(b"Bot is active")
+    
+    def do_HEAD(self):
+        self.send_response(200)
+        self.end_headers()
 
 def run_web_server():
-    port = int(os.environ.get("PORT", 8080))
+    # Render assigns the port dynamically, defaulting to 10000 on free tier
+    port = int(os.environ.get("PORT", 10000))
     server = HTTPServer(("0.0.0.0", port), HealthCheckHandler)
+    print(f"Web server started on port {port}")
     server.serve_forever()
 
 threading.Thread(target=run_web_server, daemon=True).start()
@@ -26,11 +32,13 @@ threading.Thread(target=run_web_server, daemon=True).start()
 # 2. TELEGRAM HELPER FUNCTIONS
 def send_telegram_message(chat_id, message):
     if not BOT_TOKEN:
+        print("BOT_TOKEN is missing!")
         return
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
     payload = {"chat_id": chat_id, "text": message, "parse_mode": "Markdown"}
     try:
-        requests.post(url, json=payload)
+        response = requests.post(url, json=payload)
+        print(f"Telegram response: {response.status_code}")
     except Exception as e:
         print(f"Error sending message: {e}")
 
@@ -62,9 +70,10 @@ def poll_telegram_commands():
                     if "message" in update and "text" in update["message"]:
                         chat_id = update["message"]["chat"]["id"]
                         text = update["message"]["text"].strip().lower()
+                        print(f"Received command: {text} from chat_id: {chat_id}")
                         
                         if text == "/start":
-                            send_telegram_message(chat_id, "🤖 *Gold Bot is Connected!* Type `/gold` to check the current live price or wait for automatic setups.")
+                            send_telegram_message(chat_id, "🤖 *Gold Bot is Connected!* Type `/gold` to check the current live price.")
                         elif text == "/gold" or text == "/price":
                             price = get_gold_price()
                             if price:
@@ -78,16 +87,13 @@ def poll_telegram_commands():
 # Start command listener in the background
 threading.Thread(target=poll_telegram_commands, daemon=True).start()
 
-# 4. BACKGROUND ENTRY SCANNER LOOP
+# 4. MAIN LOOP
 def main():
-    # Send startup ping to your main chat ID immediately
     if CHAT_ID:
         send_telegram_message(CHAT_ID, "🚀 *Gold Bot restarted and running live!* Send `/gold` in our chat to test it.")
     
     while True:
-        # You can add background check logic here later if needed
         time.sleep(900)
 
 if __name__ == "__main__":
     main()
-        
